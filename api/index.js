@@ -5,20 +5,24 @@ const SYSTEM_PROMPT = `Сен — Super-Ong, логистика ва бизне�
 3. Ҳар доим ўтган контекстни ҳисобга олиб, кейинги энг тўғри қадамни тавсия қилиш.`;
 
 async function neonQuery(dbUrl, query, params = []) {
-  const parsed = new URL(dbUrl);
-  const endpoint = `https://${parsed.hostname}/sql`;
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Neon-Connection-String': dbUrl
-    },
-    body: JSON.stringify({ query, params })
-  });
-  return res.json();
+  try {
+    const parsed = new URL(dbUrl);
+    const endpoint = `https://${parsed.hostname}/sql`;
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Neon-Connection-String': dbUrl
+      },
+      body: JSON.stringify({ query, params })
+    });
+    return await res.json();
+  } catch (e) {
+    return { rows: [] };
+  }
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method === 'GET') {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.status(200).send(HTML_UI);
@@ -53,20 +57,22 @@ export default async function handler(req, res) {
           `SELECT role, content FROM memory_logs WHERE user_id = $1 ORDER BY id DESC LIMIT 20`,
           [userId]
         );
-        if (dbRes.rows && dbRes.rows.length > 0) {
+        if (dbRes && dbRes.rows && dbRes.rows.length > 0) {
           longTermContext = dbRes.rows.reverse().map(r => `${r.role}: ${r.content}`).join('\n');
         }
       }
 
       let recentHistory = [];
       if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
-        const redisRes = await fetch(`${process.env.UPSTASH_REDIS_REST_URL}/lrange/chat:${userId}/0/15`, {
-          headers: { Authorization: `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}` }
-        });
-        const redisData = await redisRes.json();
-        recentHistory = (redisData.result || []).reverse().map(item => {
-          try { return JSON.parse(item); } catch { return null; }
-        }).filter(Boolean);
+        try {
+          const redisRes = await fetch(`${process.env.UPSTASH_REDIS_REST_URL}/lrange/chat:${userId}/0/15`, {
+            headers: { Authorization: `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}` }
+          });
+          const redisData = await redisRes.json();
+          recentHistory = (redisData.result || []).reverse().map(item => {
+            try { return JSON.parse(item); } catch (e) { return null; }
+          }).filter(Boolean);
+        } catch (e) {}
       }
 
       const messages = [
@@ -89,19 +95,23 @@ export default async function handler(req, res) {
       });
 
       const aiData = await aiRes.json();
-      const reply = aiData.choices?.?.message?.content || aiData.message || 'Жавоб олишда хатолик юз берди.';
+      const reply = (aiData.choices && aiData.choices[0] && aiData.choices[0].message && aiData.choices[0].message.content)
+        || aiData.message
+        || 'Жавоб олишда хатолик юз берди.';
 
       if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
-        await fetch(`${process.env.UPSTASH_REDIS_REST_URL}/lpush/chat:${userId}`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}` },
-          body: JSON.stringify(JSON.stringify({ role: 'user', content: userMessage }))
-        });
-        await fetch(`${process.env.UPSTASH_REDIS_REST_URL}/lpush/chat:${userId}`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}` },
-          body: JSON.stringify(JSON.stringify({ role: 'assistant', content: reply }))
-        });
+        try {
+          await fetch(`${process.env.UPSTASH_REDIS_REST_URL}/lpush/chat:${userId}`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}` },
+            body: JSON.stringify(JSON.stringify({ role: 'user', content: userMessage }))
+          });
+          await fetch(`${process.env.UPSTASH_REDIS_REST_URL}/lpush/chat:${userId}`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}` },
+            body: JSON.stringify(JSON.stringify({ role: 'assistant', content: reply }))
+          });
+        } catch (e) {}
       }
 
       if (process.env.NEON_DATABASE_URL) {
@@ -133,7 +143,7 @@ export default async function handler(req, res) {
   }
 
   return res.status(405).send('Method Not Allowed');
-}
+};
 
 const HTML_UI = `<!DOCTYPE html>
 <html lang="uz">
