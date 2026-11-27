@@ -196,7 +196,7 @@ const HTML_UI = `<!DOCTYPE html>
       add(text, 'user');
       const loading = add('Ўйлаяпман ва хотирани текширяпман...', 'bot');
       try {
-        const res = await fetch('/api/index', {
+        const res = await fetch('/api', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: text })
